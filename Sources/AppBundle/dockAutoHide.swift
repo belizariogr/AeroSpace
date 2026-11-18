@@ -25,6 +25,8 @@ import Common
 /// The area that the Dock occupies when it's visible. It's cached, because it can't be measured while the Dock is hidden.
 /// It also tells which monitor the Dock is on
 @MainActor private var visibleDockRect: Rect? = nil
+/// The edge of the monitor that ``visibleDockRect`` is attached to
+@MainActor private var visibleDockEdge: DockEdge? = nil
 
 private let dockBundleId = "com.apple.dock"
 /// For how long layouts wait for the Dock change. Normally, the change takes a fraction of a second.
@@ -121,7 +123,9 @@ private func updateVisibleDockRect() {
     if appliedDockAutoHide == false {
         // The Dock doesn't necessarily occupy the whole screen edge, but there is no public API to get the Dock size.
         // (The Dock window itself covers the whole screen)
-        visibleDockRect = candidates.map(\.rect).filter { $0.thickness >= minVisibleDockThickness }.maxBy(\.thickness)
+        let visibleDock = candidates.filter { $0.rect.thickness >= minVisibleDockThickness }.maxBy(\.rect.thickness)
+        visibleDockRect = visibleDock?.rect
+        visibleDockEdge = visibleDock?.edge
         return
     }
     // The hidden Dock can't be measured, but it still reserves a thin area at the edge of its monitor.
@@ -131,6 +135,47 @@ private func updateVisibleDockRect() {
     guard let hiddenDock = hiddenDockAreas.singleOrNil(), !hiddenDock.monitor.rect.contains(cachedDockRect.center) else { return }
     // Assume that the Dock has the same size on the new monitor
     visibleDockRect = dockEdgeRect(hiddenDock.edge, of: hiddenDock.monitor, thickness: cachedDockRect.thickness)
+    visibleDockEdge = hiddenDock.edge
+}
+
+extension MonitorInfo {
+    /// The rect, which corner windows of invisible workspaces are hidden in. Same as ``MonitorInfo/visibleRect``,
+    /// but it also excludes the area of the Dock if AeroSpace auto-hid it.
+    ///
+    /// The Dock is shown when the user switches to a workspace that doesn't need the Dock to be hidden (e.g. an empty one).
+    /// If the windows of the previous workspace were hidden in the area that the Dock is about to occupy,
+    /// apps would move them out of the Dock area, onto the visible part of the screen (or even onto another monitor).
+    /// The hidden window would show up out of nowhere
+    @MainActor
+    var hideInCornerRect: Rect {
+        let visibleRect = visibleRect
+        guard appliedDockAutoHide == true || pendingDockAutoHide == false,
+              let visibleDockRect, let visibleDockEdge, rect.contains(visibleDockRect.center)
+        else { return visibleRect }
+        return switch visibleDockEdge {
+            case .bottom:
+                Rect(
+                    topLeftX: visibleRect.minX,
+                    topLeftY: visibleRect.minY,
+                    width: visibleRect.width,
+                    height: max(0, min(visibleRect.maxY, visibleDockRect.minY) - visibleRect.minY),
+                )
+            case .left:
+                Rect(
+                    topLeftX: max(visibleRect.minX, visibleDockRect.maxX),
+                    topLeftY: visibleRect.minY,
+                    width: max(0, visibleRect.maxX - max(visibleRect.minX, visibleDockRect.maxX)),
+                    height: visibleRect.height,
+                )
+            case .right:
+                Rect(
+                    topLeftX: visibleRect.minX,
+                    topLeftY: visibleRect.minY,
+                    width: max(0, min(visibleRect.maxX, visibleDockRect.minX) - visibleRect.minX),
+                    height: visibleRect.height,
+                )
+        }
+    }
 }
 
 extension Rect {

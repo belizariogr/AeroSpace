@@ -160,12 +160,12 @@ final class MacWindow: Window {
                 // Zoom will jump off if you do one pixel offset https://github.com/nikitabobko/AeroSpace/issues/527
                 // todo this ad hoc won't be necessary once I implement optimization suggested by Zalim
                 let onePixelOffset = macApp.appId == .zoom ? .zero : Point(x: 1, y: -1)
-                p = nodeMonitorInfo.visibleRect.bottomLeftCorner + onePixelOffset + Point(x: -s.width, y: 0)
+                p = nodeMonitorInfo.hideInCornerRect.bottomLeftCorner + onePixelOffset + Point(x: -s.width, y: 0)
             case .bottomRightCorner:
                 // Zoom will jump off if you do one pixel offset https://github.com/nikitabobko/AeroSpace/issues/527
                 // todo this ad hoc won't be necessary once I implement optimization suggested by Zalim
                 let onePixelOffset = macApp.appId == .zoom ? .zero : Point(x: 1, y: 1)
-                p = nodeMonitorInfo.visibleRect.bottomRightCorner - onePixelOffset
+                p = nodeMonitorInfo.hideInCornerRect.bottomRightCorner - onePixelOffset
         }
         setAxFrame(p, nil)
     }
