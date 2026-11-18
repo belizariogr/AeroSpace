@@ -439,10 +439,10 @@ auto-hide-dock = true         # For all workspaces
 auto-hide-dock = ['1', 'B']   # Only for the listed workspaces
 ----
 
-* When the focused workspace has `auto-hide-dock` enabled and contains at least one tiling window,
+* When the workspace that is visible on the monitor with the Dock has `auto-hide-dock` enabled and contains at least one tiling window,
 AeroSpace turns on Dock auto-hide and tiling windows of that workspace take the space that the Dock used to occupy.
 * Floating windows keep their size and position. They hide the Dock only when they overlap it.
-* Otherwise (e.g. the focused workspace is empty), AeroSpace shows the Dock.
+* Otherwise (e.g. the workspace on the monitor with the Dock is empty), AeroSpace shows the Dock.
 * The Dock is also shown when AeroSpace quits.
 * When the config is loaded, AeroSpace turns off the macOS "Automatically hide and show the Dock" setting
 (AeroSpace manages it from now on), and sets the Dock `autohide-time-modifier` preference to `0` to make the Dock hide and show instantly.
@@ -459,7 +459,9 @@ AeroSpace controls the Dock via `System Events`.
 macOS will ask you to grant AeroSpace the Automation permission (`System Settings -> Privacy & Security -> Automation`) the first time the Dock is changed.
 If the permission is denied, the option has no effect until the config is reloaded.
 
-The Dock is shared among all monitors, so AeroSpace decides whether to hide it based on the focused workspace only.
+The Dock is shown only on one monitor at a time, so AeroSpace decides whether to hide it based on the workspace of that monitor only.
+Workspaces of other monitors are not affected, and focusing them doesn't show or hide the Dock.
+If the Dock moves to another monitor (macOS moves it when the mouse reaches the bottom of another monitor), AeroSpace follows it.
 
 [#emulation-of-virtual-workspaces]
 == Emulation of virtual workspaces
