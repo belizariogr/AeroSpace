@@ -163,6 +163,12 @@ func refreshObs(_: AXObserver, _: AXUIElement, notif: CFString, _: UnsafeMutable
     }
 }
 
+/// For how long apps are given to redraw a window after it's resized (a few frames).
+/// Apps apply the new size right away, but they redraw the window contents asynchronously
+private let appRedrawAfterResizeDelay: Duration = .milliseconds(50)
+/// See ``MacWindow/restoreSizeInCorner(_:isBackground:)``
+let maxBackgroundSizeRestoreAttempts = 2
+
 enum OptimalHideCorner {
     case bottomLeftCorner, bottomRightCorner
 }
@@ -226,6 +232,19 @@ private func layoutWorkspaces() async throws {
     }
 
     await syncDockAutoHide(hideInvisibleWorkspaces: { try? await hideInvisibleWorkspaces() })
+    // Windows of the workspaces that have just become visible might have been resized while they were hidden in the corner
+    // (e.g. when the Dock was shown). Resize them back while they are still in the corner, and let apps redraw them
+    // in the new size before they are moved onto the screen
+    var isAnyWindowResizedInCorner = false
+    for monitor in monitors {
+        let corner = monitorToOptimalHideCorner[monitor.rect.topLeftCorner] ?? .bottomRightCorner
+        for window in monitor.visibleWorkspace.allLeafWindowsRecursive {
+            if try await (window as! MacWindow).restoreSizeInCorner(corner) { // todo as!
+                isAnyWindowResizedInCorner = true
+            }
+        }
+    }
+    if isAnyWindowResizedInCorner { try await Task.sleep(for: appRedrawAfterResizeDelay) }
     // to reduce flicker, first unhide visible workspaces, then hide invisible ones
     for monitor in monitors {
         let workspace = monitor.visibleWorkspace
@@ -233,6 +252,19 @@ private func layoutWorkspaces() async throws {
         try await workspace.layoutWorkspace()
     }
     try await hideInvisibleWorkspaces()
+
+    // Apps resize hidden windows, e.g. when the Dock is shown, apps shrink their windows to the new visible frame.
+    // Restore the size while the windows are still hidden (a refresh session is scheduled for that a moment after
+    // the Dock is shown), so that the windows come back already in the right size
+    if isDockSettledForHiddenWindowsResize {
+        for workspace in Workspace.all where !workspace.isVisible {
+            guard let monitor = workspace.nodeMonitorInfo else { continue }
+            let corner = monitorToOptimalHideCorner[monitor.rect.topLeftCorner] ?? .bottomRightCorner
+            for window in workspace.allLeafWindowsRecursive {
+                _ = try await (window as! MacWindow).restoreSizeInCorner(corner, isBackground: true) // todo as!
+            }
+        }
+    }
 }
 
 @MainActor
