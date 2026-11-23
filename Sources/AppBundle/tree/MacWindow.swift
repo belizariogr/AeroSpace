@@ -140,26 +140,40 @@ final class MacWindow: Window {
     /// - Parameter size: the new size of the window. nil keeps the current size
     @MainActor
     func hideInCorner(_ corner: OptimalHideCorner, size: CGSize? = nil) async throws {
+        let windowRect = try await getAxRect(.cancellable)
+        hideInCorner(corner, currentRect: windowRect, size: size)
+    }
+
+    /// Whether ``hideInCorner(_:currentRect:size:)`` needs the current rect of the window
+    @MainActor
+    func isAxRectNeededToHideInCorner(_ corner: OptimalHideCorner) -> Bool {
+        !isHiddenInCorner || corner == .bottomLeftCorner
+    }
+
+    /// Synchronous (the window is moved asynchronously), so that many windows can be hidden at once.
+    /// Otherwise, windows are hidden one by one, and the windows behind the already hidden ones show up for a moment
+    ///
+    /// - Parameter currentRect: the current rect of the window. See ``isAxRectNeededToHideInCorner(_:)``
+    /// - Parameter size: the new size of the window. nil keeps the current size
+    @MainActor
+    func hideInCorner(_ corner: OptimalHideCorner, currentRect windowRect: Rect?, size: CGSize? = nil) {
         guard let nodeMonitorInfo else { return }
         // Don't accidentally override prevUnhiddenEmulationPosition in case of subsequent `hideInCorner` calls
         if !isHiddenInCorner {
-            guard let windowRect = try await getAxRect(.cancellable) else { return }
-            // Check for isHiddenInCorner for the second time because of the suspension point above
-            if !isHiddenInCorner {
-                let topLeftCorner = windowRect.topLeftCorner
-                let monitorRect = windowRect.center.monitorApproximation.rect // Similar to layoutFloatingWindow. Non idempotent
-                let absolutePoint = topLeftCorner - monitorRect.topLeftCorner
-                prevUnhiddenProportionalPositionInsideWorkspaceRect =
-                    Point(x: absolutePoint.x / monitorRect.width, y: absolutePoint.y / monitorRect.height)
-                if isFloating {
-                    lastFloatingSize = windowRect.size
-                }
+            guard let windowRect else { return }
+            let topLeftCorner = windowRect.topLeftCorner
+            let monitorRect = windowRect.center.monitorApproximation.rect // Similar to layoutFloatingWindow. Non idempotent
+            let absolutePoint = topLeftCorner - monitorRect.topLeftCorner
+            prevUnhiddenProportionalPositionInsideWorkspaceRect =
+                Point(x: absolutePoint.x / monitorRect.width, y: absolutePoint.y / monitorRect.height)
+            if isFloating {
+                lastFloatingSize = windowRect.size
             }
         }
         let p: Point
         switch corner {
             case .bottomLeftCorner:
-                guard let s = if let size { size } else { try await getAxSize(.cancellable) } else { fallthrough }
+                guard let s = size ?? windowRect?.size else { fallthrough }
                 // Zoom will jump off if you do one pixel offset https://github.com/nikitabobko/AeroSpace/issues/527
                 // todo this ad hoc won't be necessary once I implement optimization suggested by Zalim
                 let onePixelOffset = macApp.appId == .zoom ? .zero : Point(x: 1, y: -1)
@@ -172,6 +186,9 @@ final class MacWindow: Window {
         }
         setAxFrame(p, size)
     }
+
+    @MainActor
+    var nativeWindowId: UInt32? { macApp.nativeWindowId(of: windowId) }
 
     /// Apps resize windows while they are hidden in the corner. E.g. when the Dock is shown, apps shrink their windows
     /// to the new visible frame. If the size was restored only when the window is already back on the screen,

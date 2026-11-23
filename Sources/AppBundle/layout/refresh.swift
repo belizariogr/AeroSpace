@@ -163,6 +163,19 @@ func refreshObs(_: AXObserver, _: AXUIElement, notif: CFString, _: UnsafeMutable
     }
 }
 
+/// Window ids of on screen windows mapped to their position in the z-order (0 is the frontmost window)
+@concurrent private func getOnScreenWindowsFrontToBackOrder() async -> [UInt32: Int] {
+    let options = CGWindowListOption(arrayLiteral: .optionOnScreenOnly, .excludeDesktopElements)
+    // The windows are returned in the z-order, from front to back
+    guard let cfArray = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [CFDictionary] else { return [:] }
+    var result: [UInt32: Int] = [:]
+    for (index, elem) in cfArray.enumerated() {
+        guard let windowId = ((elem as NSDictionary)[kCGWindowNumber] as? NSNumber)?.uint32Value else { continue }
+        result[windowId] = index
+    }
+    return result
+}
+
 /// For how long apps are given to redraw a window after it's resized (a few frames).
 /// Apps apply the new size right away, but they redraw the window contents asynchronously
 private let appRedrawAfterResizeDelay: Duration = .milliseconds(50)
@@ -220,14 +233,33 @@ private func layoutWorkspaces() async throws {
     }
 
     func hideInvisibleWorkspaces() async throws {
+        var windowsToHide: [(window: MacWindow, corner: OptimalHideCorner)] = []
         for workspace in Workspace.all where !workspace.isVisible {
-            // The workspace might have been garbage collected by a concurrent refresh session while this function was
-            // suspended in hideInCorner
             guard let monitor = workspace.nodeMonitorInfo else { continue }
             let corner = monitorToOptimalHideCorner[monitor.rect.topLeftCorner] ?? .bottomRightCorner
             for window in workspace.allLeafWindowsRecursive {
-                try await (window as! MacWindow).hideInCorner(corner) // todo as!
+                windowsToHide.append((window as! MacWindow, corner)) // todo as!
             }
+        }
+        if windowsToHide.isEmpty { return }
+        // Hiding windows one by one (every window needs AX requests) is slow. Windows behind the already hidden ones
+        // would show up for a moment. So first, the AX requests are made concurrently,
+        // and then all windows are hidden at once
+        async let frontToBackOrder = getOnScreenWindowsFrontToBackOrder()
+        let rects = try await windowsToHide.mapConcurrently { (window, corner) in
+            window.isAxRectNeededToHideInCorner(corner) ? try await window.getAxRect(.cancellable) : nil
+        }
+        let order = await frontToBackOrder
+        // Hide the windows from back to front, so that the windows behind don't show up when the front ones are hidden
+        let backToFront = zip(windowsToHide, rects).sorted { lhs, rhs in
+            let lhsOrder = lhs.0.window.nativeWindowId.flatMap { order[$0] } ?? Int.max
+            let rhsOrder = rhs.0.window.nativeWindowId.flatMap { order[$0] } ?? Int.max
+            return lhsOrder > rhsOrder
+        }
+        for ((window, corner), rect) in backToFront {
+            // Concurrent refresh sessions might have changed the tree while the AX requests were in progress
+            guard let workspace = window.nodeWorkspace, !workspace.isVisible else { continue }
+            window.hideInCorner(corner, currentRect: rect)
         }
     }
 
