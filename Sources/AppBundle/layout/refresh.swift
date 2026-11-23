@@ -195,9 +195,19 @@ private func layoutWorkspaces() async throws {
         func contains(_ monitor: MonitorInfo, _ point: Point) -> Int { monitor.rect.contains(point) ? 1 : 0 }
         let important = 10
 
+        // A monitor next to the side of the corner, at any height (e.g. a shorter laptop screen aligned to the top of
+        // an external monitor). Windows hidden in the corner don't necessarily stay there: apps move them vertically,
+        // e.g. when the Dock is shown, apps shrink their windows to the new visible frame and move them up.
+        // Such a window would slide up onto that monitor
+        func isNextTo(_ other: MonitorInfo, x: CGFloat) -> Int {
+            other.rect.minX <= x && x < other.rect.maxX && other.rect.minY < monitor.rect.maxY && monitor.rect.minY < other.rect.maxY ? 1 : 0
+        }
+        let leftSide = monitors.sumOfInt { isNextTo($0, x: monitor.rect.minX - 2) }
+        let rightSide = monitors.sumOfInt { isNextTo($0, x: monitor.rect.maxX + 2) }
+
         let corner: OptimalHideCorner =
-            monitors.sumOfInt { contains($0, blc1) + contains($0, blc2) + important * contains($0, blc3) } <
-            monitors.sumOfInt { contains($0, brc1) + contains($0, brc2) + important * contains($0, brc3) }
+            monitors.sumOfInt { contains($0, blc1) + contains($0, blc2) + important * contains($0, blc3) } + leftSide <
+            monitors.sumOfInt { contains($0, brc1) + contains($0, brc2) + important * contains($0, brc3) } + rightSide
             ? .bottomLeftCorner
             : .bottomRightCorner
         monitorToOptimalHideCorner[monitor.rect.topLeftCorner] = corner
