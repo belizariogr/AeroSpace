@@ -17,6 +17,18 @@ import Common
 @MainActor private var pendingDockAutoHide: Bool? = nil
 /// The Dock change that is in progress. Layouts wait for it
 @MainActor private var dockAutoHideTask: Task<Void, Never>? = nil
+/// When the Dock was shown last time
+@MainActor private var lastDockShowTime: ContinuousClock.Instant? = nil
+/// When the Dock is shown, apps shrink their windows to the new visible frame. They don't do it instantly.
+/// Hidden windows are resized back only after that, otherwise apps would shrink them again
+private let appShrinkAfterDockShowTimeout: Duration = .seconds(1)
+
+/// Whether hidden windows can be resized back to their size. See ``appShrinkAfterDockShowTimeout``
+@MainActor var isDockSettledForHiddenWindowsResize: Bool {
+    if dockAutoHideTask != nil { return false } // Apps are about to resize windows anyway
+    guard let lastDockShowTime else { return true }
+    return ContinuousClock.now - lastDockShowTime >= appShrinkAfterDockShowTimeout
+}
 /// Set when a layout stopped waiting for ``dockAutoHideTask``. The layout must be redone once the task is done
 @MainActor private var isRelayoutNeededAfterDockAutoHideTask: Bool = false
 /// Set when AeroSpace isn't allowed to control the Dock (Automation permission is denied). Reset on config reload
@@ -242,6 +254,15 @@ func syncDockAutoHide(hideInvisibleWorkspaces: @MainActor () async -> Void) asyn
                 lastDockAutoHideFailure = nil
                 await waitForVisibleFramesChange(from: visibleFramesBefore)
                 refreshMonitorInfos()
+                if !target {
+                    // Resize the hidden windows back once apps have shrunk them
+                    let showTime = ContinuousClock.now
+                    lastDockShowTime = showTime
+                    Task.startUnstructured { @MainActor in
+                        try? await Task.sleep(for: appShrinkAfterDockShowTimeout)
+                        if lastDockShowTime == showTime { scheduleCancellableCompleteRefreshSession(.dockAutoHide) }
+                    }
+                }
             case .notAuthorized:
                 isDockAutomationBroken = true
                 appliedDockAutoHide = nil

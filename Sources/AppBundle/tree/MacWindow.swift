@@ -4,6 +4,8 @@ import Common
 final class MacWindow: Window {
     let macApp: MacApp
     private var prevUnhiddenProportionalPositionInsideWorkspaceRect: Point?
+    /// How many times ``restoreSizeInCorner(_:isBackground:)`` restored the size since the window was hidden in the corner
+    private var backgroundSizeRestoreAttempts = 0
 
     @MainActor private init(
         _ id: OpaqueWindowId,
@@ -135,8 +137,9 @@ final class MacWindow: Window {
     }
 
     // todo it's part of the window layout and should be moved to layoutRecursive.swift
+    /// - Parameter size: the new size of the window. nil keeps the current size
     @MainActor
-    func hideInCorner(_ corner: OptimalHideCorner) async throws {
+    func hideInCorner(_ corner: OptimalHideCorner, size: CGSize? = nil) async throws {
         guard let nodeMonitorInfo else { return }
         // Don't accidentally override prevUnhiddenEmulationPosition in case of subsequent `hideInCorner` calls
         if !isHiddenInCorner {
@@ -156,7 +159,7 @@ final class MacWindow: Window {
         let p: Point
         switch corner {
             case .bottomLeftCorner:
-                guard let s = try await getAxSize(.cancellable) else { fallthrough }
+                guard let s = if let size { size } else { try await getAxSize(.cancellable) } else { fallthrough }
                 // Zoom will jump off if you do one pixel offset https://github.com/nikitabobko/AeroSpace/issues/527
                 // todo this ad hoc won't be necessary once I implement optimization suggested by Zalim
                 let onePixelOffset = macApp.appId == .zoom ? .zero : Point(x: 1, y: -1)
@@ -167,7 +170,34 @@ final class MacWindow: Window {
                 let onePixelOffset = macApp.appId == .zoom ? .zero : Point(x: 1, y: 1)
                 p = nodeMonitorInfo.hideInCornerRect.bottomRightCorner - onePixelOffset
         }
-        setAxFrame(p, nil)
+        setAxFrame(p, size)
+    }
+
+    /// Apps resize windows while they are hidden in the corner. E.g. when the Dock is shown, apps shrink their windows
+    /// to the new visible frame. If the size was restored only when the window is already back on the screen,
+    /// the resize would be visible (e.g. a YouTube video in Chrome would jump). So the size is restored in the corner
+    ///
+    /// - Returns: true if the window had to be resized
+    ///
+    /// - Parameter isBackground: the window stays hidden (its workspace is invisible). It's done right after the app
+    ///   resized the window, so that the window comes back already in the right size. The app may refuse the size
+    ///   (e.g. if it doesn't allow windows to be taller than the visible frame), so the number of attempts is limited
+    @MainActor
+    func restoreSizeInCorner(_ corner: OptimalHideCorner, isBackground: Bool = false) async throws -> Bool {
+        guard isHiddenInCorner else { return false }
+        if isBackground && backgroundSizeRestoreAttempts >= maxBackgroundSizeRestoreAttempts { return false }
+        let targetSize: CGSize? = switch parent.map({ getChildParentRelation(child: self, parent: $0) }) {
+            case .floatingWindow: lastFloatingSize
+            case .tiling: lastAppliedLayoutPhysicalRect?.size
+            default: nil
+        }
+        guard let targetSize, let size = try await getAxSize(.cancellable) else { return false }
+        if abs(size.width - targetSize.width) < 1 && abs(size.height - targetSize.height) < 1 { return false }
+        // Check for isHiddenInCorner for the second time because of the suspension point above
+        guard isHiddenInCorner else { return false }
+        if isBackground { backgroundSizeRestoreAttempts += 1 }
+        try await hideInCorner(corner, size: targetSize)
+        return true
     }
 
     @MainActor
@@ -188,6 +218,7 @@ final class MacWindow: Window {
         }
 
         self.prevUnhiddenProportionalPositionInsideWorkspaceRect = nil
+        backgroundSizeRestoreAttempts = 0
     }
 
     /// Where ``unhideFromCorner`` is going to place the floating window. nil if the window isn't hidden in the corner
