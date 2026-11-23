@@ -44,6 +44,16 @@ extension WorkspacesContainer {
     if let candidate = container.mostRecentChild as? Workspace {
         return candidate
     }
+    // Workspaces that are force assigned to the monitor aren't necessarily bound to it yet
+    // (e.g. the monitor has just been connected, or AeroSpace has just started). Otherwise, a new workspace would be
+    // created for the monitor, while the force assigned workspace would be moved to the monitor as an invisible one
+    let forceAssigned = config.workspaceToMonitorForceAssignment.keys
+        .map { Workspace.get(byName: $0) }
+        .sorted()
+        .first { $0.forceAssignedMonitorInfo?.rect.topLeftCorner == point && ($0.parent !== container || !$0.isVisible) }
+    if let forceAssigned {
+        return forceAssigned
+    }
     return (1 ... Int.max).lazy
         .map { Workspace.get(byName: String($0)) }
         .first { $0.isEffectivelyEmpty && !$0.isVisible && !config.persistentWorkspaces.contains($0.name) && $0.forceAssignedMonitorInfo == nil }
